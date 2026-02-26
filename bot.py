@@ -20,6 +20,12 @@ unique_messages = {
     "ttvt": "Прожмите, кто придет на игру, а кто нет. \nНе забудьте скачать моды заранее."
 }
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+def has_required_role(member):
+    """Проверяет, есть ли у пользователя нужные роли."""
+    role_names = [role.name for role in member.roles]
+    return "NATO" in role_names or "NATOk" in role_names
+
 class VoterView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -115,7 +121,7 @@ class VoterView(discord.ui.View):
 class ClanBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.members = True
+        intents.members = True  # ВАЖНО: Должно быть включено в панели разработчика Discord
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
 
@@ -137,21 +143,50 @@ class ClanBot(commands.Bot):
         print(f'Бот {self.user} запущен и готов!')
         await self.tree.sync()
 
+    # --- АВТОМАТИЧЕСКОЕ ДОБАВЛЕНИЕ НОВИЧКОВ ---
+    async def on_member_join(self, member):
+        if has_required_role(member):
+            async with aiosqlite.connect(DB_NAME) as db:
+                await db.execute(
+                    "INSERT OR IGNORE INTO members (user_id, last_active) VALUES (?, ?)",
+                    (member.id, datetime.date.today().isoformat())
+                )
+                await db.commit()
+            print(f"Добавлен новый участник: {member.display_name}")
+
+    # --- ПРОВЕРКА ПРИ ВЫХОДЕ ---
+    async def on_member_remove(self, member):
+        async with aiosqlite.connect(DB_NAME) as db:
+            await db.execute("DELETE FROM members WHERE user_id = ?", (member.id,))
+            await db.commit()
+        print(f"Участник покинул сервер: {member.display_name}")
+
     @tasks.loop(hours=24)
     async def check_activity(self):
         async with aiosqlite.connect(DB_NAME) as db:
             async with db.execute("SELECT guild_id, log_channel, ignore_role FROM settings") as cursor:
                 configs = await cursor.fetchall()
+            
             for g_id, log_id, ignore_id in configs:
                 guild = self.get_guild(g_id)
                 if not guild: continue
                 channel = guild.get_channel(log_id)
                 if not channel: continue
+                
                 async with db.execute("SELECT user_id, last_active FROM members") as m_cursor:
                     members_data = await m_cursor.fetchall()
+                
                 for u_id, last_date_str in members_data:
                     member = guild.get_member(u_id)
-                    if not member or (ignore_id and member.get_role(ignore_id)): continue
+                    
+                    # Если человека больше нет на сервере или у него забрали роли NATO/NATOk
+                    if not member or not has_required_role(member):
+                        await db.execute("DELETE FROM members WHERE user_id = ?", (u_id,))
+                        await db.commit()
+                        continue
+
+                    if ignore_id and member.get_role(ignore_id): continue
+                    
                     last_date = datetime.date.fromisoformat(last_date_str)
                     delta = (datetime.date.today() - last_date).days
                     if delta >= 30 and delta % 30 == 0:
@@ -166,6 +201,30 @@ async def get_admin_role(guild_id):
             return row[0] if row else None
 
 # --- КОМАНДЫ ---
+
+@bot.tree.command(name="update_members", description="Синхронизировать базу участников с текущим составом NATO/NATOk")
+async def update_members(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    
+    admin_role_id = await get_admin_role(interaction.guild.id)
+    if not admin_role_id or not interaction.user.get_role(admin_role_id):
+        return await interaction.followup.send("❌ У вас нет прав для этой команды.", ephemeral=True)
+
+    added_count = 0
+    async with aiosqlite.connect(DB_NAME) as db:
+        for member in interaction.guild.members:
+            if has_required_role(member):
+                # Проверяем, есть ли он уже
+                async with db.execute("SELECT 1 FROM members WHERE user_id = ?", (member.id,)) as cursor:
+                    if not await cursor.fetchone():
+                        await db.execute(
+                            "INSERT INTO members (user_id, last_active) VALUES (?, ?)",
+                            (member.id, datetime.date.today().isoformat())
+                        )
+                        added_count += 1
+        await db.commit()
+    
+    await interaction.followup.send(f"✅ База обновлена. Добавлено новых участников: {added_count}", ephemeral=True)
 
 @bot.tree.command(name="setup", description="Настройка каналов и ролей (Только для Админа сервера)")
 @app_commands.checks.has_permissions(administrator=True)
@@ -253,7 +312,7 @@ async def opros_stop(interaction: discord.Interaction, number: int):
         
         final_report = (
             f"\n**⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯**\n"
-            f"[ЗАВЕРШЕНО] {header}\n"
+            f"{header}\n"
             f"{date_line}\n\n"
             f"**ИТОГИ ГОЛОСОВАНИЯ:**\n"
             f"✅ **Иду ({len(categories['Иду'])}):** {', '.join(categories['Иду']) or '—'}\n"
