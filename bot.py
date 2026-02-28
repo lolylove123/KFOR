@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import aiosqlite
 import datetime
+import re
 import random
 import asyncio
 import os
@@ -278,32 +279,66 @@ async def opros_start(interaction: discord.Interaction, mode: Literal["tvt", "lt
 
     await interaction.response.send_message(f"Опрос #{poll_num} запущен.", ephemeral=True)
 
-@bot.tree.command(name="roll", description="Выбрать случайного пользователя из списка")
-@app_commands.describe(users="Список пользователей (через запятую)")
+# --- ФИНАЛЬНАЯ ВЕРСИЯ ROLL (НИКИ ВМЕСТО ID) ---
+@bot.tree.command(name="roll", description="Выбрать случайного пользователя и показать список имен")
+@app_commands.describe(users="Список участников через пробел или запятую (можно тегать @)")
 async def roll(interaction: discord.Interaction, users: str):
-    """Выбирает рандомного счастливчика из предоставленной строки."""
-    
-    # Список фраз (можешь добавлять сюда новые строки)
+    """Выбирает рандомного пользователя и преобразует теги в читаемые ники."""
+
     phrases = [
-        "— Самый удачливый сукин сын —",
-        "— Я выбираю тебя —",
-        "— Жребий пал на —",
-        "— Сегодня судьба благоволит —"
+        "Самый удачливый сукин сын —",
+        "Я выбираю тебя —",
+        "Жребий пал на —",
+        "Сегодня судьба благоволит —",
+        "Звезды указали на —",
+        "Фортуна выбрала именно тебя —"
     ]
     
-    # Очищаем строку от возможных квадратных скобок и разделяем по запятой
-    raw_list = users.replace("[", "").replace("]", "")
-    user_list = [u.strip() for u in raw_list.split(",") if u.strip()]
+    # 1. Очистка ввода
+    clean_input = users.replace("[", "").replace("]", "").replace(",", " ")
+    raw_user_list = [u.strip() for u in clean_input.split() if u.strip()]
     
-    if not user_list:
-        return await interaction.response.send_message("❌ Список пуст! Введите пользователей через запятую.", ephemeral=True)
+    if not raw_user_list:
+        return await interaction.response.send_message("❌ Список пуст!", ephemeral=True)
     
-    # Выбираем случайного пользователя и случайную фразу
-    winner = random.choice(user_list)
-    phrase = random.choice(phrases)
-    
-    await interaction.response.send_message(f"{phrase} {winner}")
+    # 2. Превращаем ID/Теги в читаемые ники для списка
+    readable_names = []
+    for user_item in raw_user_list:
+        # Ищем ID внутри тега <@123456789> или <@!123456789>
+        match = re.search(r'<@!?(\d+)>', user_item)
+        if match:
+            user_id = int(match.group(1))
+            member = interaction.guild.get_member(user_id)
+            if member:
+                # Берем ник на сервере (display_name)
+                readable_names.append(member.display_name)
+            else:
+                # Если пользователя нет на сервере, оставляем как есть
+                readable_names.append(user_item)
+        else:
+            # Если это просто текст (не тег), оставляем как есть
+            readable_names.append(user_item)
 
+    # 3. Выбираем победителя из ИЗНАЧАЛЬНОГО списка (чтобы тег сработал для пинга)
+    # Но для отображения в Embed выберем соответствующий ник
+    winner_index = random.randrange(len(raw_user_list))
+    raw_winner = raw_user_list[winner_index]
+    winner_name = readable_names[winner_index]
+    
+    phrase = random.choice(phrases)
+    participants_str = "\n".join(readable_names)
+    
+    # 4. Создаем Embed
+    embed = discord.Embed(
+        description=f"🎲 **Результаты ролла**\n\n{phrase} **{winner_name}**", 
+        color=0x2ecc71
+    )
+    
+    embed.set_footer(text=f"Список участников: \n{participants_str}")
+    
+    # В content отправляем raw_winner, чтобы прошел звуковой пинг, если это был тег
+    await interaction.response.send_message(embed=embed)
+    
 @bot.tree.command(name="opros_stop", description="Остановить опрос (Только для Админа бота)")
 async def opros_stop(interaction: discord.Interaction, number: int):
     admin_role_id = await get_admin_role(interaction.guild.id)
@@ -339,7 +374,7 @@ async def opros_stop(interaction: discord.Interaction, number: int):
         
         final_report = (
             f"\n**⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯**\n"
-            f"{header}\n"
+            f"[ЗАВЕРШЕНО] {header}\n"
             f"{date_line}\n\n"
             f"**ИТОГИ ГОЛОСОВАНИЯ:**\n"
             f"✅ **Иду ({len(categories['Иду'])}):** {', '.join(categories['Иду']) or '—'}\n"
