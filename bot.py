@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 import aiosqlite
 import datetime
+import random
 import asyncio
 import os
 from dotenv import load_dotenv
@@ -276,6 +277,32 @@ async def opros_start(interaction: discord.Interaction, mode: Literal["tvt", "lt
         await db.commit()
 
     await interaction.response.send_message(f"Опрос #{poll_num} запущен.", ephemeral=True)
+
+@bot.tree.command(name="roll", description="Выбрать случайного пользователя из списка")
+@app_commands.describe(users="Список пользователей (через запятую)")
+async def roll(interaction: discord.Interaction, users: str):
+    """Выбирает рандомного счастливчика из предоставленной строки."""
+    
+    # Список фраз (можешь добавлять сюда новые строки)
+    phrases = [
+        "— Самый удачливый сукин сын —",
+        "— Я выбираю тебя —",
+        "— Жребий пал на —",
+        "— Сегодня судьба благоволит —"
+    ]
+    
+    # Очищаем строку от возможных квадратных скобок и разделяем по запятой
+    raw_list = users.replace("[", "").replace("]", "")
+    user_list = [u.strip() for u in raw_list.split(",") if u.strip()]
+    
+    if not user_list:
+        return await interaction.response.send_message("❌ Список пуст! Введите пользователей через запятую.", ephemeral=True)
+    
+    # Выбираем случайного пользователя и случайную фразу
+    winner = random.choice(user_list)
+    phrase = random.choice(phrases)
+    
+    await interaction.response.send_message(f"{phrase} {winner}")
 
 @bot.tree.command(name="opros_stop", description="Остановить опрос (Только для Админа бота)")
 async def opros_stop(interaction: discord.Interaction, number: int):
