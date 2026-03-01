@@ -20,7 +20,7 @@ DB_NAME = "clan_base.db"
 
 # --- УНИКАЛЬНЫЕ ТЕКСТЫ ---
 unique_messages = {
-    "tvt": "Прожмите, кто придет на игру, а кто нет. \nНе забудьте скачать моды заранее.",
+    "tvt": "Прожмите,кто придет на игру, а кто нет. \nНе забудьте скачать моды заранее.",
     "ltvt": "Прожмите, кто придет на игру, а кто нет. \nНе забудьте скачать моды заранее.",
     "ttvt": "Прожмите, кто придет на игру, а кто нет. \nНе забудьте скачать моды заранее."
 }
@@ -331,7 +331,7 @@ class ClanBot(commands.Bot):
                 await db.execute("INSERT OR IGNORE INTO members (user_id, last_active) VALUES (?, ?)",
                     (member.id, datetime.date.today().isoformat()))
                 await db.commit()
-                
+
     async def on_member_remove(self, member):
         async with aiosqlite.connect(DB_NAME) as db:
             await db.execute("DELETE FROM members WHERE user_id = ?", (member.id,))
