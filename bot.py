@@ -423,6 +423,65 @@ async def death_add(interaction: discord.Interaction, member: discord.Member, co
                 chan = interaction.guild.get_channel(row[0])
                 if chan: await chan.send(f"🛡️ Админ `{interaction.user}` изменил смерти `{member}` на `{count}`")
 
+@bot.tree.command(name="roll", description="Выбрать случайного пользователя и показать список имен")
+@app_commands.describe(users="Список участников через пробел или запятую (можно тегать @)")
+async def roll(interaction: discord.Interaction, users: str):
+    """Выбирает рандомного пользователя и преобразует теги в читаемые ники."""
+
+    phrases = [
+        "Самый удачливый сукин сын —",
+        "Я выбираю тебя —",
+        "Жребий пал на —",
+        "Сегодня судьба благоволит —",
+        "Звезды указали на —",
+        "Фортуна выбрала именно тебя —"
+    ]
+    
+    # 1. Очистка ввода
+    clean_input = users.replace("[", "").replace("]", "").replace(",", " ")
+    raw_user_list = [u.strip() for u in clean_input.split() if u.strip()]
+    
+    if not raw_user_list:
+        return await interaction.response.send_message("❌ Список пуст!", ephemeral=True)
+    
+    # 2. Превращаем ID/Теги в читаемые ники для списка
+    readable_names = []
+    for user_item in raw_user_list:
+        # Ищем ID внутри тега <@123456789> или <@!123456789>
+        match = re.search(r'<@!?(\d+)>', user_item)
+        if match:
+            user_id = int(match.group(1))
+            member = interaction.guild.get_member(user_id)
+            if member:
+                # Берем ник на сервере (display_name)
+                readable_names.append(member.display_name)
+            else:
+                # Если пользователя нет на сервере, оставляем как есть
+                readable_names.append(user_item)
+        else:
+            # Если это просто текст (не тег), оставляем как есть
+            readable_names.append(user_item)
+
+    # 3. Выбираем победителя из ИЗНАЧАЛЬНОГО списка (чтобы тег сработал для пинга)
+    # Но для отображения в Embed выберем соответствующий ник
+    winner_index = random.randrange(len(raw_user_list))
+    raw_winner = raw_user_list[winner_index]
+    winner_name = readable_names[winner_index]
+    
+    phrase = random.choice(phrases)
+    participants_str = "\n".join(readable_names)
+    
+    # 4. Создаем Embed
+    embed = discord.Embed(
+        description=f"🎲 **Результаты ролла**\n\n{phrase} **{winner_name}**", 
+        color=0x2ecc71
+    )
+    
+    embed.set_footer(text=f"Список участников: \n{participants_str}")
+    
+    # В content отправляем raw_winner, чтобы прошел звуковой пинг, если это был тег
+    await interaction.response.send_message(embed=embed)
+
 @bot.tree.command(name="stats", description="Показать статистику игрока")
 async def stats(interaction: discord.Interaction, member: Optional[discord.Member] = None):
     await interaction.response.defer()
@@ -566,6 +625,30 @@ async def opros_stop(interaction: discord.Interaction, number: int):
     except Exception as e:
         print(f"Error in opros_stop: {e}")
         await interaction.response.send_message("Ошибка: сообщение опроса не найдено в канале.", ephemeral=True)
+
+@bot.tree.command(name="update_members", description="Синхронизировать базу участников с текущим составом NATO/NATOk")
+async def update_members(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    
+    admin_role_id = await get_admin_role(interaction.guild.id)
+    if not admin_role_id or not interaction.user.get_role(admin_role_id):
+        return await interaction.followup.send("❌ У вас нет прав для этой команды.", ephemeral=True)
+
+    added_count = 0
+    async with aiosqlite.connect(DB_NAME) as db:
+        for member in interaction.guild.members:
+            if has_required_role(member):
+                # Проверяем, есть ли он уже
+                async with db.execute("SELECT 1 FROM members WHERE user_id = ?", (member.id,)) as cursor:
+                    if not await cursor.fetchone():
+                        await db.execute(
+                            "INSERT INTO members (user_id, last_active) VALUES (?, ?)",
+                            (member.id, datetime.date.today().isoformat())
+                        )
+                        added_count += 1
+        await db.commit()
+    
+    await interaction.followup.send(f"✅ База обновлена. Добавлено новых участников: {added_count}", ephemeral=True)
 
 @bot.tree.command(name="ignore_lists", description="Список прогульщиков (Только для Админа бота)")
 async def ignore_lists(interaction: discord.Interaction):
