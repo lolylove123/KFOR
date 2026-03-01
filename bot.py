@@ -480,19 +480,32 @@ async def roll(interaction: discord.Interaction, users: str):
     embed.set_footer(text=f"Список участников: \n{participants_str}")
     
     # В content отправляем raw_winner, чтобы прошел звуковой пинг, если это был тег
-    await interaction.response.send_message(embed=embed)
-
+    await interaction.response.send_message(embed=embed)                
+                
 @bot.tree.command(name="stats", description="Показать статистику игрока")
 async def stats(interaction: discord.Interaction, member: Optional[discord.Member] = None):
     await interaction.response.defer()
     target = member or interaction.user
     
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT level, xp, kills, deaths, messages_count, last_message_time, last_poll_vote FROM members WHERE user_id = ?", (target.id,)) as cursor:
+        # Вся работа с db должна быть ВНУТРИ этого блока
+        async with db.execute(
+            "SELECT level, xp, kills, deaths, messages_count, last_message_time, last_poll_vote FROM members WHERE user_id = ?", 
+            (target.id,)
+        ) as cursor:
             row = await cursor.fetchone()
     
-    if not row:
-        return await interaction.followup.send("Пользователь не найден в базе.")
+        if not row:
+            if has_required_role(target):
+                await db.execute(
+                    "INSERT INTO members (user_id, last_active, level, xp, kills, deaths, messages_count) VALUES (?, ?, 1, 0, 0, 0, 0)",
+                    (target.id, datetime.date.today().isoformat())
+                )
+                await db.commit()
+                # Устанавливаем стартовые значения для отрисовки
+                row = (1, 0, 0, 0, 0, None, None)
+            else:
+                return await interaction.followup.send("Пользователь не найден в базе и не имеет роль NATO/NATOk.")
 
     lvl, xp, kills, deaths, msgs, last_msg, last_vote = row
     xp_need = calculate_xp_next_level(lvl)
@@ -626,30 +639,30 @@ async def opros_stop(interaction: discord.Interaction, number: int):
         print(f"Error in opros_stop: {e}")
         await interaction.response.send_message("Ошибка: сообщение опроса не найдено в канале.", ephemeral=True)
 
-@bot.tree.command(name="update_members", description="Синхронизировать базу участников с текущим составом NATO/NATOk")
+@bot.tree.command(name="update_members", description="Синхронизировать базу участников")
 async def update_members(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     
     admin_role_id = await get_admin_role(interaction.guild.id)
     if not admin_role_id or not interaction.user.get_role(admin_role_id):
-        return await interaction.followup.send("❌ У вас нет прав для этой команды.", ephemeral=True)
+        return await interaction.followup.send("❌ У вас нет прав.", ephemeral=True)
 
     added_count = 0
     async with aiosqlite.connect(DB_NAME) as db:
-        for member in interaction.guild.members:
+        # Используем fetch_members вместо members для надежности
+        async for member in interaction.guild.fetch_members(limit=None):
             if has_required_role(member):
-                # Проверяем, есть ли он уже
                 async with db.execute("SELECT 1 FROM members WHERE user_id = ?", (member.id,)) as cursor:
                     if not await cursor.fetchone():
                         await db.execute(
-                            "INSERT INTO members (user_id, last_active) VALUES (?, ?)",
+                            "INSERT INTO members (user_id, last_active, level, xp) VALUES (?, ?, 1, 0)",
                             (member.id, datetime.date.today().isoformat())
                         )
                         added_count += 1
         await db.commit()
     
-    await interaction.followup.send(f"✅ База обновлена. Добавлено новых участников: {added_count}", ephemeral=True)
-
+    await interaction.followup.send(f"✅ База синхронизирована. Добавлено: {added_count}", ephemeral=True)        
+        
 @bot.tree.command(name="ignore_lists", description="Список прогульщиков (Только для Админа бота)")
 async def ignore_lists(interaction: discord.Interaction):
     admin_role_id = await get_admin_role(interaction.guild.id)
