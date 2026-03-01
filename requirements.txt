@@ -1,3 +1,5 @@
 discord.py
 aiosqlite
+Pillow
+aiohttp
 python-dotenv
